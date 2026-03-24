@@ -16,6 +16,16 @@ type Record struct {
 	InputTokens  int    `json:"input_tokens"`
 	OutputTokens int    `json:"output_tokens"`
 	Source       string `json:"source,omitempty"`
+	// promptlint telemetry fields
+	Analysis *PromptlintAnalysis `json:"analysis,omitempty"`
+}
+
+// PromptlintAnalysis contains promptlint scoring data.
+type PromptlintAnalysis struct {
+	Words      int    `json:"words"`
+	Complexity string `json:"complexity"`
+	Action     string `json:"action"`
+	Model      string `json:"suggested_model"`
 }
 
 // Report contains aggregated cost analysis.
@@ -60,6 +70,13 @@ func GenerateFromFile(path string) (*Report, error) {
 		}
 
 		report.TotalRequests++
+
+		// Estimate tokens from promptlint data if no explicit counts
+		if r.InputTokens == 0 && r.Analysis != nil && r.Analysis.Words > 0 {
+			r.InputTokens = int(float64(r.Analysis.Words) * 1.33)
+			r.OutputTokens = r.InputTokens // estimate 1:1 ratio
+		}
+
 		report.TotalInput += r.InputTokens
 		report.TotalOutput += r.OutputTokens
 
