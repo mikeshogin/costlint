@@ -10,6 +10,7 @@ import (
 
 	"github.com/mshogin/costlint/pkg/ab"
 	"github.com/mshogin/costlint/pkg/budget"
+	"github.com/mshogin/costlint/pkg/cache"
 	"github.com/mshogin/costlint/pkg/counter"
 	"github.com/mshogin/costlint/pkg/pricing"
 	"github.com/mshogin/costlint/pkg/reporter"
@@ -17,7 +18,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: costlint {count|estimate|compare|subscription|report|budget|ab}\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: costlint {count|estimate|compare|subscription|report|budget|ab|cache}\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  count                                              Count tokens from stdin\n")
 		fmt.Fprintf(os.Stderr, "  estimate --model X                                 Estimate cost for model\n")
@@ -26,6 +27,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  report --source X                                  Generate cost report from telemetry JSONL\n")
 		fmt.Fprintf(os.Stderr, "  budget --max N --model X                           Track cumulative cost; alert at 80%%, exit 1 when exceeded\n")
 		fmt.Fprintf(os.Stderr, "  ab --name T --model-a A --model-b B               A/B cost comparison; reads prompts from stdin\n")
+		fmt.Fprintf(os.Stderr, "  cache --model X                                    Prompt caching telemetry; reads prompts from stdin\n")
 		os.Exit(1)
 	}
 
@@ -46,6 +48,8 @@ func main() {
 		runBudget()
 	case "ab":
 		runAB()
+	case "cache":
+		runCache()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)
 		os.Exit(1)
@@ -338,4 +342,42 @@ func runAB() {
 	}
 	out, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(out))
+}
+
+// runCache reads prompts from stdin (one per line), simulates cache hit/miss using
+// Jaccard similarity on word sets, and prints a summary report.
+//
+// Usage:
+//
+//	echo -e "explain recursion\nexplain recursion in Go" | costlint cache --model sonnet
+func runCache() {
+	model := "sonnet"
+	args := os.Args[2:]
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--model":
+			if i+1 < len(args) {
+				i++
+				model = args[i]
+			}
+		}
+	}
+
+	sim := cache.NewCacheSimulator(model)
+
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		prompt := scanner.Text()
+		if prompt == "" {
+			continue
+		}
+		sim.Add(prompt)
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Print(cache.FormatCacheReport(sim.Metrics))
 }

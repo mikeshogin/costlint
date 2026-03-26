@@ -261,6 +261,131 @@ func max(a, b int) int {
 	return b
 }
 
+// CacheSimulator tracks prompts and detects similarity-based cache hits.
+type CacheSimulator struct {
+	model     string
+	threshold float64
+	prompts   []string
+	Metrics   CacheMetrics
+}
+
+// CacheMetrics holds telemetry for the cache simulation.
+type CacheMetrics struct {
+	TotalPrompts  int     `json:"total_prompts"`
+	CacheHits     int     `json:"cache_hits"`
+	CacheMisses   int     `json:"cache_misses"`
+	HitRate       float64 `json:"hit_rate"`
+	TokensSaved   int     `json:"tokens_saved"`
+	CostSavedUSD  float64 `json:"cost_saved_usd"`
+}
+
+// NewCacheSimulator creates a simulator for the given model with default 0.5 Jaccard threshold.
+func NewCacheSimulator(model string) *CacheSimulator {
+	return &CacheSimulator{
+		model:     model,
+		threshold: 0.5,
+	}
+}
+
+// Add registers a prompt and returns whether it was a cache hit.
+func (s *CacheSimulator) Add(prompt string) bool {
+	hit := false
+	tokens := estimateTokens(prompt)
+
+	for _, prev := range s.prompts {
+		if jaccard(prompt, prev) >= s.threshold {
+			hit = true
+			break
+		}
+	}
+
+	s.prompts = append(s.prompts, prompt)
+	s.Metrics.TotalPrompts++
+
+	if hit {
+		s.Metrics.CacheHits++
+		s.Metrics.TokensSaved += tokens
+		s.Metrics.CostSavedUSD += costForTokens(s.model, tokens)
+	} else {
+		s.Metrics.CacheMisses++
+	}
+
+	if s.Metrics.TotalPrompts > 0 {
+		s.Metrics.HitRate = float64(s.Metrics.CacheHits) / float64(s.Metrics.TotalPrompts) * 100
+	}
+
+	return hit
+}
+
+// jaccard computes Jaccard similarity between two strings based on word sets.
+func jaccard(a, b string) float64 {
+	setA := wordSet(a)
+	setB := wordSet(b)
+	if len(setA) == 0 && len(setB) == 0 {
+		return 1.0
+	}
+	intersection := 0
+	for w := range setA {
+		if setB[w] {
+			intersection++
+		}
+	}
+	union := len(setA) + len(setB) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
+func wordSet(s string) map[string]bool {
+	set := make(map[string]bool)
+	for _, word := range strings.Fields(strings.ToLower(s)) {
+		if len(word) > 0 {
+			set[word] = true
+		}
+	}
+	return set
+}
+
+// estimateTokens approximates token count: ~4 chars per token.
+func estimateTokens(s string) int {
+	n := len(s) / 4
+	if n == 0 {
+		n = 1
+	}
+	return n
+}
+
+func costForTokens(model string, tokens int) float64 {
+	// Cache read tokens cost 90% less than regular input.
+	// Use a simple per-model price table ($ per 1M input tokens).
+	pricePerM := map[string]float64{
+		"haiku":  0.80,
+		"sonnet": 3.00,
+		"opus":   15.00,
+	}
+	p, ok := pricePerM[model]
+	if !ok {
+		p = 3.00 // default to sonnet
+	}
+	regularCost := float64(tokens) / 1_000_000 * p
+	cachedCost := regularCost * (1 - CacheReadDiscount)
+	return regularCost - cachedCost
+}
+
+// FormatCacheReport produces human-readable output for CacheMetrics.
+func FormatCacheReport(m CacheMetrics) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Cache Simulation Results:\n")
+	fmt.Fprintf(&b, "  Total prompts : %d\n", m.TotalPrompts)
+	fmt.Fprintf(&b, "  Cache hits    : %d\n", m.CacheHits)
+	fmt.Fprintf(&b, "  Cache misses  : %d\n", m.CacheMisses)
+	fmt.Fprintf(&b, "  Hit rate      : %.1f%%\n", m.HitRate)
+	fmt.Fprintf(&b, "  Tokens saved  : %d\n", m.TokensSaved)
+	fmt.Fprintf(&b, "  Cost saved    : $%.4f\n", m.CostSavedUSD)
+	return b.String()
+}
+
 // FormatReport produces human-readable cache metrics report.
 func FormatReport(m *Metrics) string {
 	var b strings.Builder
