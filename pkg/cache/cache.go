@@ -225,23 +225,23 @@ func generateHints(m *Metrics) []string {
 	var hints []string
 
 	if m.CacheHitRate < 30 {
-		hints = append(hints, "Low cache hit rate (%.0f%%). Consider stabilizing system prompts and context files.", m.CacheHitRate)
+		hints = append(hints, fmt.Sprintf("Low cache hit rate (%.0f%%). Consider stabilizing system prompts and context files.", m.CacheHitRate))
 	}
 
 	if m.BlockStabilityAvg < 50 && m.TotalRequests > 5 {
-		hints = append(hints, "System prompt changes frequently (stability %.0f%%). Pin system prompt for better caching.", m.BlockStabilityAvg)
+		hints = append(hints, fmt.Sprintf("System prompt changes frequently (stability %.0f%%). Pin system prompt for better caching.", m.BlockStabilityAvg))
 	}
 
 	if m.PotentialSavings > 1.0 {
-		hints = append(hints, "Potential savings of $%.2f if cache misses were eliminated. Investigate why blocks aren't cached.", m.PotentialSavings)
+		hints = append(hints, fmt.Sprintf("Potential savings of $%.2f if cache misses were eliminated. Investigate why blocks aren't cached.", m.PotentialSavings))
 	}
 
 	if m.CacheHitRate > 80 {
-		hints = append(hints, "Excellent cache performance (%.0f%% hit rate). Current setup is well-optimized.", m.CacheHitRate)
+		hints = append(hints, fmt.Sprintf("Excellent cache performance (%.0f%% hit rate). Current setup is well-optimized.", m.CacheHitRate))
 	}
 
 	if m.JaccardSimilarity < 0.2 && m.TotalRequests > 3 {
-		hints = append(hints, "Low request similarity (%.2f). Requests vary too much for effective caching.", m.JaccardSimilarity)
+		hints = append(hints, fmt.Sprintf("Low request similarity (%.2f). Requests vary too much for effective caching.", m.JaccardSimilarity))
 	}
 
 	return hints

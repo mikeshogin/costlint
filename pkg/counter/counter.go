@@ -2,7 +2,6 @@ package counter
 
 import (
 	"strings"
-	"unicode"
 )
 
 // TokenCount holds input and output token estimates.
@@ -13,19 +12,10 @@ type TokenCount struct {
 }
 
 // Count estimates token count for a text string.
-// Uses word-based approximation (1 token ~ 0.75 words for English).
-// For production use, integrate tiktoken or cl100k_base tokenizer.
+// Uses cl100k_base tokenizer approximation (GPT-4/Claude tokenization).
+// Accuracy target: within 10% of real tiktoken for typical English/code text.
 func Count(text string) TokenCount {
-	words := countWords(text)
-	// Approximation: ~1.33 tokens per word (English average)
-	tokens := int(float64(words) * 1.33)
-	if tokens < 1 && len(text) > 0 {
-		tokens = 1
-	}
-	return TokenCount{
-		Input: tokens,
-		Total: tokens,
-	}
+	return CountAccurate(text)
 }
 
 // EstimateOutput estimates output tokens based on input and task type.
@@ -42,25 +32,6 @@ func EstimateOutput(inputTokens int, taskType string) int {
 	default:
 		return inputTokens // 1:1 ratio as default
 	}
-}
-
-func countWords(s string) int {
-	inWord := false
-	count := 0
-	for _, r := range s {
-		if unicode.IsSpace(r) {
-			if inWord {
-				count++
-				inWord = false
-			}
-		} else {
-			inWord = true
-		}
-	}
-	if inWord {
-		count++
-	}
-	return count
 }
 
 // CountWithContext estimates tokens including system prompt and context.
