@@ -15,6 +15,7 @@ import (
 	"github.com/mshogin/costlint/pkg/perf"
 	"github.com/mshogin/costlint/pkg/pricing"
 	"github.com/mshogin/costlint/pkg/reporter"
+	"github.com/mshogin/costlint/pkg/telemetry"
 )
 
 func main() {
@@ -30,6 +31,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  ab --name T --model-a A --model-b B               A/B cost comparison; reads prompts from stdin\n")
 		fmt.Fprintf(os.Stderr, "  cache --model X                                    Prompt caching telemetry; reads prompts from stdin\n")
 		fmt.Fprintf(os.Stderr, "  perf                                               Benchmark all operations and report latency as JSON\n")
+		fmt.Fprintf(os.Stderr, "  telemetry ingest                                   Ingest promptlint JSONL from stdin into ~/.costlint-telemetry.jsonl\n")
+		fmt.Fprintf(os.Stderr, "  telemetry summary                                  Show aggregated metrics from ~/.costlint-telemetry.jsonl\n")
 		os.Exit(1)
 	}
 
@@ -54,6 +57,8 @@ func main() {
 		runCache()
 	case "perf":
 		runPerf()
+	case "telemetry":
+		runTelemetry()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)
 		os.Exit(1)
@@ -464,4 +469,63 @@ func runCache() {
 	}
 
 	fmt.Print(cache.FormatCacheReport(sim.Metrics))
+}
+
+// defaultTelemetryPath returns the path to the shared telemetry log file.
+func defaultTelemetryPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".costlint-telemetry.jsonl"
+	}
+	return home + "/.costlint-telemetry.jsonl"
+}
+
+// runTelemetry dispatches to ingest or summary sub-commands.
+//
+// Usage:
+//
+//	promptlint analyze ... | costlint telemetry ingest
+//	costlint telemetry summary
+func runTelemetry() {
+	if len(os.Args) < 3 {
+		fmt.Fprintf(os.Stderr, "Usage: costlint telemetry {ingest|summary}\n")
+		fmt.Fprintf(os.Stderr, "  ingest   Read promptlint JSONL from stdin and append to ~/.costlint-telemetry.jsonl\n")
+		fmt.Fprintf(os.Stderr, "  summary  Print aggregated metrics from ~/.costlint-telemetry.jsonl\n")
+		os.Exit(1)
+	}
+
+	log := telemetry.NewTelemetryLog(defaultTelemetryPath())
+
+	switch os.Args[2] {
+	case "ingest":
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", err)
+			os.Exit(1)
+		}
+		n, err := log.Ingest(data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error ingesting telemetry: %v\n", err)
+			os.Exit(1)
+		}
+		result := map[string]interface{}{
+			"ingested": n,
+			"log":      defaultTelemetryPath(),
+		}
+		out, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(out))
+
+	case "summary":
+		s, err := log.Summary()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading telemetry: %v\n", err)
+			os.Exit(1)
+		}
+		out, _ := json.MarshalIndent(s, "", "  ")
+		fmt.Println(string(out))
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown telemetry sub-command: %s\n", os.Args[2])
+		os.Exit(1)
+	}
 }
