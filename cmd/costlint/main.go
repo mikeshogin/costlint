@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/mshogin/costlint/pkg/ab"
 	"github.com/mshogin/costlint/pkg/budget"
 	"github.com/mshogin/costlint/pkg/counter"
 	"github.com/mshogin/costlint/pkg/pricing"
@@ -16,14 +17,15 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: costlint {count|estimate|compare|subscription|report|budget}\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: costlint {count|estimate|compare|subscription|report|budget|ab}\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
-		fmt.Fprintf(os.Stderr, "  count                                       Count tokens from stdin\n")
-		fmt.Fprintf(os.Stderr, "  estimate --model X                          Estimate cost for model\n")
-		fmt.Fprintf(os.Stderr, "  compare                                     Compare costs across all models\n")
-		fmt.Fprintf(os.Stderr, "  subscription --plan X --model Y --tokens N  Compare subscription vs pay-as-you-go\n")
-		fmt.Fprintf(os.Stderr, "  report --source X                           Generate cost report from telemetry JSONL\n")
-		fmt.Fprintf(os.Stderr, "  budget --max N --model X                    Track cumulative cost; alert at 80%%, exit 1 when exceeded\n")
+		fmt.Fprintf(os.Stderr, "  count                                              Count tokens from stdin\n")
+		fmt.Fprintf(os.Stderr, "  estimate --model X                                 Estimate cost for model\n")
+		fmt.Fprintf(os.Stderr, "  compare                                            Compare costs across all models\n")
+		fmt.Fprintf(os.Stderr, "  subscription --plan X --model Y --tokens N         Compare subscription vs pay-as-you-go\n")
+		fmt.Fprintf(os.Stderr, "  report --source X                                  Generate cost report from telemetry JSONL\n")
+		fmt.Fprintf(os.Stderr, "  budget --max N --model X                           Track cumulative cost; alert at 80%%, exit 1 when exceeded\n")
+		fmt.Fprintf(os.Stderr, "  ab --name T --model-a A --model-b B               A/B cost comparison; reads prompts from stdin\n")
 		os.Exit(1)
 	}
 
@@ -42,6 +44,8 @@ func main() {
 		runReport()
 	case "budget":
 		runBudget()
+	case "ab":
+		runAB()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)
 		os.Exit(1)
@@ -268,4 +272,70 @@ func runBudget() {
 	if b.IsOverBudget() {
 		os.Exit(1)
 	}
+}
+
+// runAB reads prompts from stdin (one per line) and estimates cost for each
+// on both models, then prints a comparison summary.
+//
+// Usage:
+//
+//	echo -e "prompt1\nprompt2" | costlint ab --name test1 --model-a sonnet --model-b haiku
+func runAB() {
+	name := "ab-test"
+	modelA := "sonnet"
+	modelB := "haiku"
+
+	args := os.Args[2:]
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			if i+1 < len(args) {
+				i++
+				name = args[i]
+			}
+		case "--model-a":
+			if i+1 < len(args) {
+				i++
+				modelA = args[i]
+			}
+		case "--model-b":
+			if i+1 < len(args) {
+				i++
+				modelB = args[i]
+			}
+		}
+	}
+
+	test := ab.NewABTest(name, modelA, modelB)
+
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		prompt := scanner.Text()
+		if prompt == "" {
+			continue
+		}
+		tc := counter.Count(prompt)
+		test.AddResult(modelA, prompt, tc.Input)
+		test.AddResult(modelB, prompt, tc.Input)
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", err)
+		os.Exit(1)
+	}
+
+	summary := test.Summary()
+
+	result := map[string]interface{}{
+		"name":              test.Name,
+		"model_a":           test.ModelA,
+		"model_b":           test.ModelB,
+		"sample_size":       test.SampleSize,
+		"model_a_avg_cost":  summary.ModelAAvgCost,
+		"model_b_avg_cost":  summary.ModelBAvgCost,
+		"savings_pct":       summary.SavingsPct,
+		"recommendation":    summary.Recommendation,
+	}
+	out, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(out))
 }

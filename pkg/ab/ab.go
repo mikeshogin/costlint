@@ -149,6 +149,129 @@ func AnalyzeResults(logPath string) (*Result, error) {
 	return result, nil
 }
 
+// ABResult holds a single data point for an A/B test.
+type ABResult struct {
+	PromptHash string  `json:"prompt_hash"`
+	Model      string  `json:"model"`
+	Tokens     int     `json:"tokens"`
+	CostUSD    float64 `json:"cost_usd"`
+	LatencyMs  int64   `json:"latency_ms"` // placeholder, always 0 (no real inference)
+}
+
+// ABSummary aggregates the comparison between two models.
+type ABSummary struct {
+	ModelAAvgCost float64 `json:"model_a_avg_cost"`
+	ModelBAvgCost float64 `json:"model_b_avg_cost"`
+	SavingsPct    float64 `json:"savings_pct"`
+	Recommendation string `json:"recommendation"`
+}
+
+// ABTest is an in-memory A/B cost comparison between two models.
+type ABTest struct {
+	Name       string     `json:"name"`
+	ModelA     string     `json:"model_a"`
+	ModelB     string     `json:"model_b"`
+	SampleSize int        `json:"sample_size"`
+	Results    []ABResult `json:"results"`
+}
+
+// NewABTest creates a new ABTest for two model keys.
+func NewABTest(name, modelA, modelB string) *ABTest {
+	return &ABTest{
+		Name:   name,
+		ModelA: modelA,
+		ModelB: modelB,
+	}
+}
+
+// promptHash returns a short deterministic hash for a prompt string.
+func promptHash(prompt string) string {
+	h := 0
+	for _, c := range prompt {
+		h = h*31 + int(c)
+	}
+	if h < 0 {
+		h = -h
+	}
+	digits := "0123456789abcdef"
+	result := make([]byte, 8)
+	for i := 7; i >= 0; i-- {
+		result[i] = digits[h&0xf]
+		h >>= 4
+	}
+	return string(result)
+}
+
+// AddResult records one cost data point for the given model and prompt.
+// tokens is the estimated input token count; output tokens are estimated
+// automatically at 1:1 ratio to keep things simple.
+func (t *ABTest) AddResult(model, prompt string, tokens int) {
+	outputTokens := tokens // 1:1 default estimate
+	cost := pricing.Estimate(model, tokens, outputTokens)
+	t.Results = append(t.Results, ABResult{
+		PromptHash: promptHash(prompt),
+		Model:      model,
+		Tokens:     tokens + outputTokens,
+		CostUSD:    cost,
+		LatencyMs:  0,
+	})
+	t.SampleSize = len(t.Results)
+}
+
+// Summary computes average costs per model and recommends the cheaper one.
+func (t *ABTest) Summary() ABSummary {
+	var sumA, sumB float64
+	var countA, countB int
+
+	for _, r := range t.Results {
+		switch r.Model {
+		case t.ModelA:
+			sumA += r.CostUSD
+			countA++
+		case t.ModelB:
+			sumB += r.CostUSD
+			countB++
+		}
+	}
+
+	var avgA, avgB float64
+	if countA > 0 {
+		avgA = sumA / float64(countA)
+	}
+	if countB > 0 {
+		avgB = sumB / float64(countB)
+	}
+
+	var savingsPct float64
+	var recommendation string
+
+	switch {
+	case avgA == 0 && avgB == 0:
+		recommendation = "no data"
+	case avgA == 0:
+		recommendation = t.ModelB
+	case avgB == 0:
+		recommendation = t.ModelA
+	case avgA <= avgB:
+		if avgB > 0 {
+			savingsPct = (avgB - avgA) / avgB * 100
+		}
+		recommendation = t.ModelA
+	default:
+		if avgA > 0 {
+			savingsPct = (avgA - avgB) / avgA * 100
+		}
+		recommendation = t.ModelB
+	}
+
+	return ABSummary{
+		ModelAAvgCost:  avgA,
+		ModelBAvgCost:  avgB,
+		SavingsPct:     savingsPct,
+		Recommendation: recommendation,
+	}
+}
+
 // FormatResults produces a human-readable A/B comparison.
 func FormatResults(r *Result) string {
 	var b strings.Builder
