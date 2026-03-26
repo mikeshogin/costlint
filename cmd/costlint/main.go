@@ -12,13 +12,14 @@ import (
 	"github.com/mshogin/costlint/pkg/budget"
 	"github.com/mshogin/costlint/pkg/cache"
 	"github.com/mshogin/costlint/pkg/counter"
+	"github.com/mshogin/costlint/pkg/perf"
 	"github.com/mshogin/costlint/pkg/pricing"
 	"github.com/mshogin/costlint/pkg/reporter"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: costlint {count|estimate|compare|subscription|report|budget|ab|cache}\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: costlint {count|estimate|compare|subscription|report|budget|ab|cache|perf}\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  count                                              Count tokens from stdin\n")
 		fmt.Fprintf(os.Stderr, "  estimate --model X                                 Estimate cost for model\n")
@@ -28,6 +29,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  budget --max N --model X                           Track cumulative cost; alert at 80%%, exit 1 when exceeded\n")
 		fmt.Fprintf(os.Stderr, "  ab --name T --model-a A --model-b B               A/B cost comparison; reads prompts from stdin\n")
 		fmt.Fprintf(os.Stderr, "  cache --model X                                    Prompt caching telemetry; reads prompts from stdin\n")
+		fmt.Fprintf(os.Stderr, "  perf                                               Benchmark all operations and report latency as JSON\n")
 		os.Exit(1)
 	}
 
@@ -50,6 +52,8 @@ func main() {
 		runAB()
 	case "cache":
 		runCache()
+	case "perf":
+		runPerf()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)
 		os.Exit(1)
@@ -341,6 +345,86 @@ func runAB() {
 		"recommendation":    summary.Recommendation,
 	}
 	out, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(out))
+}
+
+// runPerf benchmarks all costlint operations on sample data and reports latency as JSON.
+//
+// Usage:
+//
+//	costlint perf
+func runPerf() {
+	const iterations = 1000
+
+	// Sample data for benchmarks.
+	sampleText := "The quick brown fox jumps over the lazy dog. " +
+		"This is a sample prompt to benchmark token counting and pricing estimation. " +
+		"It contains multiple sentences to produce a realistic token count."
+
+	samplePrompts := []string{
+		"explain recursion in Go",
+		"explain recursion",
+		"what is a goroutine in Go?",
+		"how do goroutines work in Go?",
+		"write a function to reverse a string in Go",
+	}
+
+	type result struct {
+		Operation    string  `json:"operation"`
+		Iterations   int     `json:"iterations"`
+		AvgMs        float64 `json:"avg_ms"`
+		MinMs        float64 `json:"min_ms"`
+		MaxMs        float64 `json:"max_ms"`
+		OpsPerSecond float64 `json:"ops_per_second"`
+	}
+
+	var results []result
+
+	// Benchmark: token counting speed.
+	countResult := perf.Benchmark(func() {
+		counter.Count(sampleText)
+	}, iterations)
+	results = append(results, result{
+		Operation:    "count",
+		Iterations:   countResult.Iterations,
+		AvgMs:        countResult.AvgMs,
+		MinMs:        countResult.MinMs,
+		MaxMs:        countResult.MaxMs,
+		OpsPerSecond: countResult.OpsPerSecond,
+	})
+
+	// Benchmark: pricing estimation speed.
+	tc := counter.Count(sampleText)
+	outputEstimate := counter.EstimateOutput(tc.Input, "")
+	estimateResult := perf.Benchmark(func() {
+		pricing.Estimate("sonnet", tc.Input, outputEstimate)
+	}, iterations)
+	results = append(results, result{
+		Operation:    "estimate",
+		Iterations:   estimateResult.Iterations,
+		AvgMs:        estimateResult.AvgMs,
+		MinMs:        estimateResult.MinMs,
+		MaxMs:        estimateResult.MaxMs,
+		OpsPerSecond: estimateResult.OpsPerSecond,
+	})
+
+	// Benchmark: cache similarity check speed.
+	cacheResult := perf.Benchmark(func() {
+		sim := cache.NewCacheSimulator("sonnet")
+		for _, p := range samplePrompts {
+			sim.Add(p)
+		}
+	}, iterations/10) // fewer iterations; each run processes multiple prompts
+	results = append(results, result{
+		Operation:    "cache",
+		Iterations:   cacheResult.Iterations,
+		AvgMs:        cacheResult.AvgMs,
+		MinMs:        cacheResult.MinMs,
+		MaxMs:        cacheResult.MaxMs,
+		OpsPerSecond: cacheResult.OpsPerSecond,
+	})
+
+	out, _ := json.MarshalIndent(results, "", "  ")
 	fmt.Println(string(out))
 }
 
