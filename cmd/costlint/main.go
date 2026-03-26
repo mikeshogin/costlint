@@ -16,13 +16,14 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: costlint {count|estimate|compare|report|budget}\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: costlint {count|estimate|compare|subscription|report|budget}\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
-		fmt.Fprintf(os.Stderr, "  count                          Count tokens from stdin\n")
-		fmt.Fprintf(os.Stderr, "  estimate --model X             Estimate cost for model\n")
-		fmt.Fprintf(os.Stderr, "  compare                        Compare costs across all models\n")
-		fmt.Fprintf(os.Stderr, "  report --source X              Generate cost report from telemetry JSONL\n")
-		fmt.Fprintf(os.Stderr, "  budget --max N --model X       Track cumulative cost; alert at 80%%, exit 1 when exceeded\n")
+		fmt.Fprintf(os.Stderr, "  count                                       Count tokens from stdin\n")
+		fmt.Fprintf(os.Stderr, "  estimate --model X                          Estimate cost for model\n")
+		fmt.Fprintf(os.Stderr, "  compare                                     Compare costs across all models\n")
+		fmt.Fprintf(os.Stderr, "  subscription --plan X --model Y --tokens N  Compare subscription vs pay-as-you-go\n")
+		fmt.Fprintf(os.Stderr, "  report --source X                           Generate cost report from telemetry JSONL\n")
+		fmt.Fprintf(os.Stderr, "  budget --max N --model X                    Track cumulative cost; alert at 80%%, exit 1 when exceeded\n")
 		os.Exit(1)
 	}
 
@@ -35,6 +36,8 @@ func main() {
 		runEstimate()
 	case "compare":
 		runCompare()
+	case "subscription":
+		runSubscription()
 	case "report":
 		runReport()
 	case "budget":
@@ -102,6 +105,70 @@ func runCompare() {
 		"costs":         costs,
 	}
 	out, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(out))
+}
+
+// runSubscription compares a subscription plan vs pay-as-you-go for a given monthly token volume.
+// Usage:
+//
+//	costlint subscription --plan claude_max_5 --model sonnet --tokens 10000000
+//	costlint subscription --plan all --model sonnet --tokens 10000000
+func runSubscription() {
+	plan := "all"
+	model := "sonnet"
+	var tokens int64
+
+	args := os.Args[2:]
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--plan":
+			if i+1 < len(args) {
+				i++
+				plan = args[i]
+			}
+		case "--model":
+			if i+1 < len(args) {
+				i++
+				model = args[i]
+			}
+		case "--tokens":
+			if i+1 < len(args) {
+				i++
+				v, err := strconv.ParseInt(args[i], 10, 64)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Invalid --tokens value: %s\n", args[i])
+					os.Exit(1)
+				}
+				tokens = v
+			}
+		}
+	}
+
+	if tokens <= 0 {
+		fmt.Fprintf(os.Stderr, "Usage: costlint subscription --plan <plan|all> --model <model> --tokens <monthly_tokens>\n")
+		fmt.Fprintf(os.Stderr, "  --plan    Subscription plan key (claude_max_5, claude_max_20) or 'all'\n")
+		fmt.Fprintf(os.Stderr, "  --model   Model for pay-as-you-go pricing (haiku, sonnet, opus)\n")
+		fmt.Fprintf(os.Stderr, "  --tokens  Estimated monthly token usage\n")
+		os.Exit(1)
+	}
+
+	if plan == "all" {
+		comparisons, err := pricing.CompareAllSubscriptions(model, tokens)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		out, _ := json.MarshalIndent(comparisons, "", "  ")
+		fmt.Println(string(out))
+		return
+	}
+
+	cmp, err := pricing.CompareSubscription(plan, model, tokens)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	out, _ := json.MarshalIndent(cmp, "", "  ")
 	fmt.Println(string(out))
 }
 
