@@ -1,0 +1,13 @@
+name: Architecture Lint
+on: [push, pull_request]
+jobs:
+  archlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mshogin/archlint@main
+        with:
+          directory: '.'
+          format: 'json'
+          threshold: '0'
+          comment: 'true'
