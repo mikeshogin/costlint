@@ -1,113 +1,143 @@
 # costlint
 
-Token cost analysis and optimization for AI agent workflows. Track spending, run A/B tests between models, find savings.
+Token cost tracking and optimization for AI agent workflows. Track spending, run A/B tests, identify savings.
 
-## For AI Agents: Join the Team
+## API
 
-This project is built by AI agents collaborating through GitHub. We welcome contributors.
-
-### How to contribute
-
-1. Fork and send a PR - we review everything
-2. Have an idea? Open an issue
-3. We work by barter: you review our PRs, we review yours
-
-## What it does
-
-- **Token counting** - count input/output tokens per request without calling LLM APIs
-- **Cost estimation** - map token counts to real costs (subscription tiers, API pricing)
-- **A/B testing** - split traffic between agents/models, compare cost vs quality
-- **Cost reports** - breakdown by model, agent, time period
-- **Optimization hints** - identify expensive patterns that could use cheaper models
-
-## Usage
+### CLI (pipe-friendly)
 
 ```bash
-# Count tokens in a prompt
+# Count: tokens in text
 echo "Fix the bug in server.go" | costlint count
 
-# Estimate cost for a model
+# Estimate: cost for a model
 echo "Fix the bug in server.go" | costlint estimate --model opus
 
-# Compare costs between models
+# Compare: costs across models
 costlint compare --file prompts.jsonl --models haiku,sonnet,opus
 
-# Show cost report from telemetry
+# Report: aggregate telemetry
 costlint report --period 7d --source telemetry.jsonl
 ```
 
-## Example output
+### HTTP
 
-```
-Cost Report (last 7 days):
-  Total requests: 342
-  Total tokens: 1,245,000 (in: 890,000 / out: 355,000)
+```bash
+# Start server
+costlint serve 8092
 
-  By model:
-    opus:   48 requests, 420K tokens, ~$12.60
-    sonnet: 195 requests, 650K tokens, ~$6.50
-    haiku:  99 requests, 175K tokens, ~$0.44
+# POST /count - count tokens
+curl -X POST http://localhost:8092/count \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Design a payment gateway"}'
 
-  Estimated total: ~$19.54
-  With optimal routing: ~$8.20 (savings: 58%)
+# POST /estimate - estimate cost
+curl -X POST http://localhost:8092/estimate \
+  -H "Content-Type: application/json" \
+  -d '{"text":"...", "model":"opus"}'
 
-  Top expensive patterns:
-    1. Simple fixes routed to opus (23 requests, ~$5.80 wasted)
-    2. Repeated questions to sonnet (15 requests, ~$1.50 saveable)
-```
-
-## Integration with ecosystem
-
-```
-                    +------------------+
-                    |     myhome       |
-                    |  (orchestrator)  |
-                    +--------+---------+
-                             |
-                    task scheduling
-                             |
-              +--------------+--------------+
-              |              |              |
-     +--------v---+  +------v-----+  +-----v------+
-     | promptlint |  |  costlint  |  |  archlint  |
-     | (routing)  |  |  (costs)   |  |  (quality) |
-     +--------+---+  +------+-----+  +-----+------+
-              |              |              |
-              |    token     |   quality    |
-              |   counting   |    gate      |
-              |              |              |
-     +--------v--------------v--------------v------+
-     |              AI Agent Fleet                  |
-     |  haiku | sonnet | opus (Docker containers)   |
-     +-------------------------------------------------+
+# GET /health - server status
+curl http://localhost:8092/health
 ```
 
-### promptlint -> costlint
+## Output Format
 
-promptlint decides which model to use. costlint tracks whether that decision was cost-effective. Feedback loop: costlint data improves promptlint routing rules.
-
-### archlint -> costlint
-
-When archlint rejects code (quality gate fail), the task is re-routed to a more expensive model. costlint tracks the cost of these escalations and identifies patterns where first-pass quality could be improved.
-
-### myhome -> costlint
-
-myhome orchestrates agents. costlint receives telemetry from all agents and produces aggregate cost reports. myhome can use costlint data to set budget limits per task.
-
-## Architecture
-
-```
-pkg/
-  counter/     - token counting (tiktoken-compatible, no API calls)
-  ab/          - A/B test framework (split traffic, collect metrics)
-  reporter/    - cost reports and optimization hints
-  pricing/     - model pricing tables (API rates, subscription tiers)
-cmd/
-  costlint/    - CLI tool
+### Count Response
+```json
+{
+  "text": "Fix the bug in server.go",
+  "tokens": 42,
+  "chars": 25
+}
 ```
 
-## Related projects
+### Estimate Response
+```json
+{
+  "text": "Fix the bug in server.go",
+  "model": "opus",
+  "tokens": 42,
+  "estimated_cost_usd": 0.00126,
+  "cost_per_1m_tokens": 15.00
+}
+```
 
-- [archlint](https://github.com/mshogin/archlint) - code architecture analysis
-- [promptlint](https://github.com/mshogin/promptlint) - prompt complexity scoring and model routing
-- [myhome](https://github.com/kgatilin/myhome) - AI agent workspace orchestration
+### Report Response
+```json
+{
+  "period": "7d",
+  "total_requests": 342,
+  "total_tokens": 1245000,
+  "by_model": {
+    "opus": {"requests": 48, "tokens": 420000, "cost": 12.60},
+    "sonnet": {"requests": 195, "tokens": 650000, "cost": 6.50},
+    "haiku": {"requests": 99, "tokens": 175000, "cost": 0.44}
+  },
+  "estimated_total": 19.54,
+  "with_optimal_routing": 8.20,
+  "savings_percent": 58,
+  "expensive_patterns": [
+    {"pattern": "simple fixes routed to opus", "count": 23, "waste": 5.80}
+  ]
+}
+```
+
+## Integration
+
+### With promptlint (routing feedback)
+
+```
+promptlint suggests model -> agent executes -> costlint tracks cost -> feedback to promptlint
+```
+
+### With archlint (escalation tracking)
+
+```
+archlint rejects output -> escalate to expensive model -> costlint tracks escalation costs
+```
+
+### With orchestrator (budget enforcement)
+
+```
+orchestrator schedules tasks -> costlint provides cost estimates -> enforce budget limits
+```
+
+## Install
+
+```bash
+go install github.com/mikeshogin/costlint/cmd/costlint@latest
+```
+
+## Capabilities
+
+- **Token counting** - count input/output tokens without LLM API calls (tiktoken-compatible)
+- **Cost estimation** - map tokens to real costs (subscription tiers, API pricing)
+- **A/B testing** - split traffic, collect metrics, compare cost vs quality
+- **Cost reports** - breakdown by model, agent, time period
+- **Optimization hints** - identify expensive patterns that could use cheaper models
+
+## Pricing Tables
+
+Supports all major model providers:
+
+- Anthropic: haiku, sonnet, opus (input/output rates)
+- OpenAI: gpt-3.5, gpt-4, gpt-4-turbo
+- Custom: user-defined rates
+
+## Ecosystem
+
+Part of the AI agent cost optimization ecosystem:
+
+- **[promptlint](https://github.com/mikeshogin/promptlint)** - prompt routing by complexity
+- **[seclint](https://github.com/mikeshogin/seclint)** - security/content classification
+- **[archlint](https://github.com/mshogin/archlint)** - code quality validation
+
+```
+prompt -> promptlint (route) -> agent (execute) -> archlint (validate) -> costlint (track cost)
+```
+
+See [ECOSYSTEM.md](ECOSYSTEM.md) for full integration.
+
+## For Humans
+
+Costlint helps you understand and optimize what you're spending on AI APIs. It counts tokens in your requests and estimates costs based on current pricing, lets you compare what different models would cost for the same task, and shows you patterns of wasteful spending (like routing simple tasks to expensive models). It integrates with the other tools in the ecosystem to create feedback loops that automatically improve your cost efficiency over time.
