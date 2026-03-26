@@ -5,9 +5,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mshogin/archlint@main
+      - id: scan
+        uses: mshogin/archlint@main
         with:
           directory: '.'
           format: 'json'
           threshold: '0'
           comment: 'true'
+      - name: Create tech-debt issue if violations found
+        if: steps.scan.outputs.violations > 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="tech-debt: archlint found ${{ steps.scan.outputs.violations }} violations (health: ${{ steps.scan.outputs.health_score }})"
+          # Check if issue already exists
+          EXISTING=$(gh issue list --label tech-debt --search "$TITLE" --json number --jq 'length')
+          if [ "$EXISTING" = "0" ]; then
+            gh issue create --label tech-debt --title "$TITLE" --body "Archlint scan found violations. Health score: ${{ steps.scan.outputs.health_score }}/100. Run \`archlint scan .\` for details."
+          fi
