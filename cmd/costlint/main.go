@@ -12,6 +12,7 @@ import (
 	"github.com/mshogin/costlint/pkg/budget"
 	"github.com/mshogin/costlint/pkg/cache"
 	"github.com/mshogin/costlint/pkg/counter"
+	"github.com/mshogin/costlint/pkg/daily"
 	"github.com/mshogin/costlint/pkg/perf"
 	"github.com/mshogin/costlint/pkg/pricing"
 	"github.com/mshogin/costlint/pkg/reporter"
@@ -33,6 +34,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  perf                                               Benchmark all operations and report latency as JSON\n")
 		fmt.Fprintf(os.Stderr, "  telemetry ingest                                   Ingest promptlint JSONL from stdin into ~/.costlint-telemetry.jsonl\n")
 		fmt.Fprintf(os.Stderr, "  telemetry summary                                  Show aggregated metrics from ~/.costlint-telemetry.jsonl\n")
+		fmt.Fprintf(os.Stderr, "  daily [--format json|text]                         Generate today's cost report with trend and anomaly detection\n")
 		os.Exit(1)
 	}
 
@@ -59,6 +61,8 @@ func main() {
 		runPerf()
 	case "telemetry":
 		runTelemetry()
+	case "daily":
+		runDaily()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)
 		os.Exit(1)
@@ -527,5 +531,46 @@ func runTelemetry() {
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown telemetry sub-command: %s\n", os.Args[2])
 		os.Exit(1)
+	}
+}
+
+// defaultBudgetPath returns the path to the geniearchi daily budget JSON.
+func defaultBudgetPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home + "/projects/geniearchi/daily-budget.json"
+}
+
+// runDaily generates a daily cost report for today from telemetry and budget data.
+//
+// Usage:
+//
+//	costlint daily
+//	costlint daily --format json
+//	costlint daily --format text
+func runDaily() {
+	format := "json"
+	args := os.Args[2:]
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--format" && i+1 < len(args) {
+			i++
+			format = args[i]
+		}
+	}
+
+	report, err := daily.GenerateReport(defaultTelemetryPath(), defaultBudgetPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating daily report: %v\n", err)
+		os.Exit(1)
+	}
+
+	switch format {
+	case "text":
+		fmt.Print(daily.FormatText(report))
+	default:
+		out, _ := json.MarshalIndent(report, "", "  ")
+		fmt.Println(string(out))
 	}
 }
