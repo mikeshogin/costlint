@@ -13,6 +13,7 @@ import (
 	"github.com/mshogin/costlint/pkg/cache"
 	"github.com/mshogin/costlint/pkg/counter"
 	"github.com/mshogin/costlint/pkg/daily"
+	"github.com/mshogin/costlint/pkg/feature"
 	"github.com/mshogin/costlint/pkg/perf"
 	"github.com/mshogin/costlint/pkg/pricing"
 	"github.com/mshogin/costlint/pkg/reporter"
@@ -21,7 +22,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: costlint {count|estimate|compare|subscription|report|budget|ab|cache|perf}\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: costlint {count|estimate|compare|subscription|report|budget|ab|cache|perf|track}\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  count                                              Count tokens from stdin\n")
 		fmt.Fprintf(os.Stderr, "  estimate --model X                                 Estimate cost for model\n")
@@ -35,6 +36,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  telemetry ingest                                   Ingest promptlint JSONL from stdin into ~/.costlint-telemetry.jsonl\n")
 		fmt.Fprintf(os.Stderr, "  telemetry summary                                  Show aggregated metrics from ~/.costlint-telemetry.jsonl\n")
 		fmt.Fprintf(os.Stderr, "  daily [--format json|text]                         Generate today's cost report with trend and anomaly detection\n")
+		fmt.Fprintf(os.Stderr, "  track start --issue N --model M                    Start tracking tokens for a feature/issue\n")
+		fmt.Fprintf(os.Stderr, "  track add --issue N --tokens T [--desc D]          Add token usage to an active session\n")
+		fmt.Fprintf(os.Stderr, "  track stop --issue N                               Stop tracking and print summary\n")
+		fmt.Fprintf(os.Stderr, "  track status                                       Show active tracking sessions\n")
+		fmt.Fprintf(os.Stderr, "  track report                                       Show all features cost summary\n")
 		os.Exit(1)
 	}
 
@@ -63,6 +69,8 @@ func main() {
 		runTelemetry()
 	case "daily":
 		runDaily()
+	case "track":
+		runTrack()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)
 		os.Exit(1)
@@ -530,6 +538,153 @@ func runTelemetry() {
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown telemetry sub-command: %s\n", os.Args[2])
+		os.Exit(1)
+	}
+}
+
+// runTrack dispatches cost-per-feature sub-commands.
+//
+// Usage:
+//
+//	costlint track start --issue 42 --model sonnet
+//	costlint track add --issue 42 --tokens 500 --desc "analyze prompt"
+//	costlint track stop --issue 42
+//	costlint track status
+//	costlint track report
+func runTrack() {
+	if len(os.Args) < 3 {
+		fmt.Fprintf(os.Stderr, "Usage: costlint track {start|add|stop|status|report}\n")
+		fmt.Fprintf(os.Stderr, "  start  --issue N --model M       Begin a tracking session\n")
+		fmt.Fprintf(os.Stderr, "  add    --issue N --tokens T [--desc D]  Add token usage\n")
+		fmt.Fprintf(os.Stderr, "  stop   --issue N                 End session and print summary\n")
+		fmt.Fprintf(os.Stderr, "  status                           List active sessions\n")
+		fmt.Fprintf(os.Stderr, "  report                           All features cost summary\n")
+		os.Exit(1)
+	}
+
+	tracker := feature.NewFeatureTracker()
+	sub := os.Args[2]
+	args := os.Args[3:]
+
+	switch sub {
+	case "start":
+		issueID := ""
+		model := "sonnet"
+		for i := 0; i < len(args); i++ {
+			switch args[i] {
+			case "--issue":
+				if i+1 < len(args) {
+					i++
+					issueID = args[i]
+				}
+			case "--model":
+				if i+1 < len(args) {
+					i++
+					model = args[i]
+				}
+			}
+		}
+		if issueID == "" {
+			fmt.Fprintf(os.Stderr, "Usage: costlint track start --issue N --model M\n")
+			os.Exit(1)
+		}
+		if err := tracker.StartTracking(issueID, model); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		result := map[string]interface{}{
+			"issue_id": issueID,
+			"model":    model,
+			"status":   "started",
+		}
+		out, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(out))
+
+	case "add":
+		issueID := ""
+		tokens := 0
+		desc := ""
+		for i := 0; i < len(args); i++ {
+			switch args[i] {
+			case "--issue":
+				if i+1 < len(args) {
+					i++
+					issueID = args[i]
+				}
+			case "--tokens":
+				if i+1 < len(args) {
+					i++
+					v, err := strconv.Atoi(args[i])
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Invalid --tokens value: %s\n", args[i])
+						os.Exit(1)
+					}
+					tokens = v
+				}
+			case "--desc":
+				if i+1 < len(args) {
+					i++
+					desc = args[i]
+				}
+			}
+		}
+		if issueID == "" || tokens <= 0 {
+			fmt.Fprintf(os.Stderr, "Usage: costlint track add --issue N --tokens T [--desc D]\n")
+			os.Exit(1)
+		}
+		if err := tracker.AddTokens(issueID, tokens, desc); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		result := map[string]interface{}{
+			"issue_id": issueID,
+			"tokens":   tokens,
+			"desc":     desc,
+			"status":   "added",
+		}
+		out, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(out))
+
+	case "stop":
+		issueID := ""
+		for i := 0; i < len(args); i++ {
+			if args[i] == "--issue" && i+1 < len(args) {
+				i++
+				issueID = args[i]
+			}
+		}
+		if issueID == "" {
+			fmt.Fprintf(os.Stderr, "Usage: costlint track stop --issue N\n")
+			os.Exit(1)
+		}
+		summary, err := tracker.StopTracking(issueID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		out, _ := json.MarshalIndent(summary, "", "  ")
+		fmt.Println(string(out))
+
+	case "status":
+		sessions, err := tracker.ActiveSessions()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		out, _ := json.MarshalIndent(sessions, "", "  ")
+		fmt.Println(string(out))
+
+	case "report":
+		summaries, err := tracker.Report()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		out, _ := json.MarshalIndent(summaries, "", "  ")
+		fmt.Println(string(out))
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown track sub-command: %s\n", sub)
 		os.Exit(1)
 	}
 }
