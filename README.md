@@ -82,6 +82,45 @@ curl http://localhost:8092/health
 }
 ```
 
+### Branch Cost Forecast
+
+```bash
+# Forecast cost for current branch vs main
+costlint forecast
+
+# Specific branch and base
+costlint forecast --branch feature-x --base main
+
+# With model override
+costlint forecast --model sonnet
+
+# JSON output
+costlint forecast --format json
+
+# Combined with feature tracking
+costlint forecast --issue 42
+```
+
+**Output:**
+```
+Branch: feature-x (vs main)
+Commits: 12 | Files changed: 34 | Lines: +890 / -120
+
+Estimated prompts: 24
+Avg cost per prompt: $0.15 (last 7 days telemetry)
+Model mix: haiku 40% | sonnet 50% | opus 10%
+
+FORECAST: ~$3.60
+Confidence: high (7+ days telemetry, 12 commits)
+
+Breakdown:
+  haiku:  10 prompts x $0.02 = $0.20
+  sonnet: 12 prompts x $0.18 = $2.16
+  opus:    2 prompts x $0.62 = $1.24
+```
+
+Forecast analyzes git log of a branch, estimates the number of prompts from commit patterns, and multiplies by average cost per prompt from telemetry data. Confidence scoring (low/medium/high) reflects how much historical data is available. With `--issue`, combines already-spent costs from feature tracking with remaining forecast.
+
 ## Integration
 
 ### With promptlint (routing feedback)
